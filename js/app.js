@@ -229,11 +229,19 @@ function bindSaveEdits(){
     }
     btn.disabled = true; btn.textContent = "Guardando..."; msg.textContent = "";
     try {
-      const res = await fetch(DASHBOARD_CONFIG.gsUpdateUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ changes: PENDING_CHANGES })
-      });
+const res = await fetch(DASHBOARD_CONFIG.gsUpdateUrl, {
+  method: "POST",
+  headers: { "Content-Type": "text/plain" }, // evita preflight CORS
+  body: JSON.stringify({ changes: PENDING_CHANGES })
+});
+const txt = await res.text();
+let out;
+try { 
+  out = JSON.parse(txt); 
+} catch(e) { 
+  out = { ok:false, error:"Respuesta no JSON" }; 
+}
+
       const out = await res.json().catch(()=>({ ok:false, error:"Respuesta no JSON" }));
       if (out.ok) {
         msg.textContent = "Cambios guardados correctamente.";
