@@ -1,490 +1,256 @@
-let RAW = [];
-let FILTERED = [];
-let PIE_CHART = null;
-let PENDING_CHANGES = []; // { id, oldStatus, newStatus }
+// =======================================
+// Dashboard Gestión de Proyectos
+// =======================================
 
-document.addEventListener("DOMContentLoaded", init);
+// --- Configuración global ---
+let ALL_DATA = [];
+let FILTERED_DATA = [];
+let PENDING_CHANGES = [];
 
-async function init(){
-  await guard();                       // Clave o modo share
-  await loadData();                    // Carga datos
-  buildFilters();                      // Llenado de selects
-  readUrlFilters();                    // Preselección por URL (?cliente=&proyecto=)
-  applyFiltersAndRender();             // Render general
-  bindReset();                         // Botón limpiar
-  bindRefresh();                       // Botón actualizar
-  bindShare();                         // Copiar enlace compartido
-  bindSaveEdits();                     // Guardar cambios (estatus por ID)
-
-  const chk = document.querySelector("#chk-include-finished");
-  if (chk) chk.addEventListener("change", () => renderResumenEjecutivo());
-}
-
-/* ---------- ACCESO / SHARE ---------- */
-
-async function guard(){
-  const url = new URL(location.href);
-  const share = url.searchParams.get("share");
-  const email = (url.searchParams.get("email")||"").toLowerCase().trim();
-  const cliente = url.searchParams.get("cliente");
-  const proyecto = url.searchParams.get("proyecto");
-
-  if (share === "1") {
-    sessionStorage.setItem("pendingShareCheck","1");
-    sessionStorage.setItem("shareEmail", email);
-    sessionStorage.setItem("shareCliente", cliente||"");
-    sessionStorage.setItem("shareProyecto", proyecto||"");
-    sessionStorage.setItem("authOk","1");
-    return;
-  }
-
-  if (sessionStorage.getItem("authOk")==="1") return;
-
-  const modal = document.getElementById("access-modal");
-  const input = document.getElementById("access-input");
-  const btn = document.getElementById("access-btn");
-  const msg = document.getElementById("access-msg");
-
-  modal.style.display = "flex";
-  input.value = "";
-  input.focus();
-
-  await new Promise(resolve => {
-    const submit = () => {
-      const val = input.value;
-      if (val === "Tomi.2016") {
-        sessionStorage.setItem("authOk","1");
-        modal.style.display = "none";
-        resolve();
-      } else {
-        msg.textContent = "Clave incorrecta.";
-        input.select();
-      }
-    };
-    btn.addEventListener("click", submit);
-    input.addEventListener("keydown", (e)=>{ if(e.key==="Enter") submit(); });
-  });
-}
-
-function validateShareAccessIfNeeded(){
-  if (sessionStorage.getItem("pendingShareCheck") !== "1") return true;
-  sessionStorage.removeItem("pendingShareCheck");
-
-  const email = (sessionStorage.getItem("shareEmail")||"").toLowerCase().trim();
-  const cliente = sessionStorage.getItem("shareCliente")||"";
-  const proyecto = sessionStorage.getItem("shareProyecto")||"";
-
-  const ok = RAW.some(r => {
-    const em = (r.Email||"").toLowerCase().trim();
-    return em && em === email
-      && (!cliente || r.Cliente === cliente)
-      && (!proyecto || r.Proyecto === proyecto);
-  });
-
-  if (!ok) {
-    sessionStorage.removeItem("authOk");
-    const modal = document.getElementById("access-modal");
-    const msg = document.getElementById("access-msg");
-    modal.style.display = "flex";
-    msg.textContent = "Acceso por enlace compartido no autorizado para este correo/cliente/proyecto.";
-    return false;
-  }
-  return true;
-}
-
-/* ---------- DATA ---------- */
-
-async function loadData(force=false) {
-  const url = DASHBOARD_CONFIG.csvUrl + (force ? ('&t=' + Date.now()) : '');
-  const res = await fetch(url);
-  const text = await res.text();
-  const parsed = Papa.parse(text, {header: true, skipEmptyLines: true});
-  RAW = parsed.data.map(row => ({
-    ID: row[DASHBOARD_CONFIG.columns.id] ?? "",
-    Tipo: row[DASHBOARD_CONFIG.columns.tipo] ?? "",
-    Cliente: row[DASHBOARD_CONFIG.columns.cliente] ?? "",
-    Proyecto: row[DASHBOARD_CONFIG.columns.proyecto] ?? "",
-    Tareas: row[DASHBOARD_CONFIG.columns.tareas] ?? "",
-    Deadline: row[DASHBOARD_CONFIG.columns.deadline] ?? "",
-    Estatus: row[DASHBOARD_CONFIG.columns.estatus] ?? "",
-    Owner: row[DASHBOARD_CONFIG.columns.owner] ?? "",
-    Email: row[DASHBOARD_CONFIG.columns.email] ?? ""
-  }));
-  validateShareAccessIfNeeded();
-  PENDING_CHANGES = [];
-}
-
-function buildFilters(rebuild=false) {
-  const tipoSel = document.querySelector("#f-tipo");
-  const clienteSel = document.querySelector("#f-cliente");
-  const proyectoSel = document.querySelector("#f-proyecto");
-  const estatusSel = document.querySelector("#f-estatus");
-  const ownerSel = document.querySelector("#f-owner");
-
-  if (rebuild) {
-    ["#f-tipo","#f-cliente","#f-proyecto","#f-estatus","#f-owner"].forEach(sel=>{
-      const s=document.querySelector(sel); if (s) s.length=1;
-    });
-  }
-
-  const tipos = uniqueSorted(RAW.map(r=>r.Tipo));
-  const clientes = uniqueSorted(RAW.map(r=>r.Cliente));
-  const proyectos = uniqueSorted(RAW.map(r=>r.Proyecto));
-  const estatuses = uniqueSorted(RAW.map(r=>r.Estatus));
-  const owners = uniqueSorted(RAW.map(r=>r.Owner));
-
-  for (const v of tipos) tipoSel.append(new Option(v, v));
-  for (const v of clientes) clienteSel.append(new Option(v, v));
-  for (const v of proyectos) proyectoSel.append(new Option(v, v));
-  for (const v of estatuses) estatusSel.append(new Option(v, v));
-  for (const v of owners) ownerSel.append(new Option(v, v));
-
-  [tipoSel, clienteSel, proyectoSel, estatusSel, ownerSel].forEach(sel => {
-    sel.addEventListener("change", applyFiltersAndRender);
-  });
-}
-
-function readUrlFilters(){
-  const url = new URL(location.href);
-  const c = url.searchParams.get("cliente");
-  const p = url.searchParams.get("proyecto");
-  if (c) { const sel = document.querySelector("#f-cliente"); if (sel) sel.value = c; }
-  if (p) { const sel = document.querySelector("#f-proyecto"); if (sel) sel.value = p; }
-}
-
-function getActiveFilters() {
-  return {
-    tipo: document.querySelector("#f-tipo").value || null,
-    cliente: document.querySelector("#f-cliente").value || null,
-    proyecto: document.querySelector("#f-proyecto").value || null,
-    estatus: document.querySelector("#f-estatus").value || null,
-    owner: document.querySelector("#f-owner").value || null
-  };
-}
-
-function applyFiltersAndRender() {
-  const f = getActiveFilters();
-  FILTERED = RAW.filter(r => {
-    return (!f.tipo || r.Tipo === f.tipo)
-      && (!f.cliente || r.Cliente === f.cliente)
-      && (!f.proyecto || r.Proyecto === f.proyecto)
-      && (!f.estatus || r.Estatus === f.estatus)
-      && (!f.owner || r.Owner === f.owner);
-  });
-
-  renderResumenEjecutivo();
-  renderAperturaPorEstatus();
-  renderPie();
-}
-
-function bindReset() {
-  document.querySelector("#btn-reset").addEventListener("click", () => {
-    ["#f-tipo","#f-cliente","#f-proyecto","#f-estatus","#f-owner"].forEach(sel => document.querySelector(sel).value = "");
-    applyFiltersAndRender();
-  });
-}
-
-function bindRefresh(){
-  const btn = document.getElementById("btn-refresh");
-  if (!btn) return;
-  btn.addEventListener("click", async ()=>{
-    btn.disabled = true; btn.textContent = "Actualizando...";
-    try {
-      await loadData(true);
-      buildFilters(true);
-      readUrlFilters();
-      applyFiltersAndRender();
-    } finally {
-      btn.disabled = false; btn.textContent = "Actualizar";
-    }
-  });
-}
-
-function bindShare(){
-  const btn = document.getElementById("btn-share");
-  btn.addEventListener("click", async ()=>{
-    const cliente = document.querySelector("#f-cliente").value || "";
-    const proyecto = document.querySelector("#f-proyecto").value || "";
-    if (!cliente || !proyecto) {
-      alert("Selecciona Cliente y Proyecto para generar un enlace filtrado.");
+// Solicitud de clave al ingresar
+document.addEventListener("DOMContentLoaded", async () => {
+  if (!sessionStorage.getItem("auth_ok")) {
+    const pwd = prompt("🔐 Ingresa la clave de acceso:");
+    if (pwd !== "Tomi.2016") {
+      alert("Clave incorrecta. Acceso denegado.");
+      window.location.href = "https://google.com";
       return;
     }
-    const email = prompt("Correo autorizado (debe existir en la columna Email para ese Cliente/Proyecto):","");
-    if (!email) return;
-    const base = location.origin + location.pathname;
-    const url = `${base}?cliente=${encodeURIComponent(cliente)}&proyecto=${encodeURIComponent(proyecto)}&share=1&email=${encodeURIComponent(email)}`;
-    await copyToClipboard(url);
-    alert("Enlace copiado al portapapeles.");
-  });
-}
+    sessionStorage.setItem("auth_ok", "1");
+  }
 
-function bindSaveEdits(){
-  const btn = document.getElementById("btn-save-edits");
-  const msg = document.getElementById("save-msg");
-  btn.addEventListener("click", async ()=>{
-    if (!PENDING_CHANGES.length) { msg.textContent = "No hay cambios para guardar."; return; }
-    if (!DASHBOARD_CONFIG.gsUpdateUrl || DASHBOARD_CONFIG.gsUpdateUrl.startsWith("PEGAR_AQUI")) {
-      msg.textContent = "Configura gsUpdateUrl en data/config.js (URL de tu Web App de Apps Script).";
-      return;
-    }
-    btn.disabled = true; btn.textContent = "Guardando..."; msg.textContent = "";
-    try {
-const res = await fetch(DASHBOARD_CONFIG.gsUpdateUrl, {
-  method: "POST",
-  headers: { "Content-Type": "text/plain" }, // evita preflight CORS
-  body: JSON.stringify({ changes: PENDING_CHANGES })
+  await loadData();
+  setupFilters();
+  renderDashboard();
+
+  document.querySelector("#btn-refresh")?.addEventListener("click", loadData);
+  document.querySelector("#btn-save")?.addEventListener("click", saveChanges);
 });
-const txt = await res.text();
-let out;
-try { 
-  out = JSON.parse(txt); 
-} catch(e) { 
-  out = { ok:false, error:"Respuesta no JSON" }; 
-}
 
-      const out = await res.json().catch(()=>({ ok:false, error:"Respuesta no JSON" }));
-      if (out.ok) {
-        msg.textContent = "Cambios guardados correctamente.";
-        await loadData(true);
-        applyFiltersAndRender();
-      } else {
-        msg.textContent = "Error al guardar: " + (out.error||"desconocido");
-      }
-    } catch (e) {
-      msg.textContent = "Error de red al guardar cambios.";
-    } finally {
-      btn.disabled = false; btn.textContent = "Guardar cambios";
-      PENDING_CHANGES = [];
-    }
-  });
-}
+// --- Cargar datos desde el CSV de Google Sheets ---
+async function loadData() {
+  try {
+    const res = await fetch(DASHBOARD_CONFIG.csvUrl);
+    const text = await res.text();
+    const rows = Papa.parse(text, { header: true }).data;
 
-/* ---------- APERTURA POR ESTATUS (accordion con edición de estatus) ---------- */
+    ALL_DATA = rows.filter(r => r.ID && r.Tipo); // limpia filas vacías
+    applyFilters();
 
-function renderAperturaPorEstatus() {
-  const container = document.querySelector("#apertura-estatus");
-  container.innerHTML = "";
-
-  const today = new Date(); today.setHours(0,0,0,0);
-  const in21 = new Date(today); in21.setDate(in21.getDate() + 21);
-
-  const atrasados = [];
-  const proximos = [];
-  const futuros = [];
-
-  for (const r of FILTERED) {
-    const d = parseDate(r.Deadline);
-    if (!d) continue;
-    const estatus = (r.Estatus || "").toLowerCase().trim();
-    const esFinalizado = estatus === "finalizado";
-    if (d < today && !esFinalizado) {
-      atrasados.push(r);
-    } else if (d >= today && d <= in21) {
-      proximos.push(r);
-    } else if (d > in21) {
-      futuros.push(r);
-    }
+    alert("✅ Datos actualizados correctamente.");
+  } catch (err) {
+    console.error("Error cargando datos:", err);
+    alert("❌ No se pudieron cargar los datos desde Google Sheets.");
   }
+}
 
-  const groups = [
-    {title: "Atrasados", data: atrasados},
-    {title: "Próximos vencimientos (≤ 21 días)", data: proximos},
-    {title: "Actividades programadas para más de 3 semanas", data: futuros}
-  ];
+// --- Aplicar filtros ---
+function setupFilters() {
+  const filterIds = ["tipo-filter", "cliente-filter", "proyecto-filter", "owner-filter", "estatus-filter"];
+  filterIds.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener("change", applyFilters);
+  });
+  document.querySelector("#clear-filters")?.addEventListener("click", clearFilters);
+}
 
-  for (const g of groups) {
-    const list = g.data.slice().sort((a,b) => {
-      const da = parseDate(a.Deadline); const db = parseDate(b.Deadline);
-      if (!da && !db) return 0;
-      if (!da) return 1;
-      if (!db) return -1;
-      return da - db;
+function clearFilters() {
+  document.querySelectorAll("select").forEach(s => s.value = "Todos");
+  applyFilters();
+}
+
+function applyFilters() {
+  const tipo = document.getElementById("tipo-filter")?.value || "Todos";
+  const cliente = document.getElementById("cliente-filter")?.value || "Todos";
+  const proyecto = document.getElementById("proyecto-filter")?.value || "Todos";
+  const estatus = document.getElementById("estatus-filter")?.value || "Todos";
+  const owner = document.getElementById("owner-filter")?.value || "Todos";
+
+  FILTERED_DATA = ALL_DATA.filter(r => {
+    return (tipo === "Todos" || r.Tipo === tipo) &&
+           (cliente === "Todos" || r.Cliente === cliente) &&
+           (proyecto === "Todos" || r.Proyecto === proyecto) &&
+           (estatus === "Todos" || r.Estatus === estatus) &&
+           (owner === "Todos" || r.Owner === owner);
+  });
+
+  renderDashboard();
+}
+
+// --- Render principal del dashboard ---
+function renderDashboard() {
+  renderResumen();
+  renderEstatus();
+  renderReporte();
+}
+
+// --- Resumen Ejecutivo ---
+function renderResumen() {
+  const totalProyectos = ALL_DATA.filter(r => r.Tipo === "Proyecto").length;
+  const totalPropuestas = ALL_DATA.filter(r => r.Tipo === "Propuesta").length;
+  const totalAtrasadas = ALL_DATA.filter(r => !isFinalizado(r) && isAtrasada(r)).length;
+  const totalIniciadas = ALL_DATA.filter(r => r.Estatus === "Iniciado").length;
+  const atrasadasFinalizadas = ALL_DATA.filter(r => isAtrasada(r) && r.Estatus === "Finalizado").length;
+
+  const ratio = ALL_DATA.length > 0
+    ? ((ALL_DATA.filter(r => r.Estatus === "Finalizado").length / ALL_DATA.length) * 100).toFixed(1)
+    : 0;
+
+  document.getElementById("resumen-container").innerHTML = `
+    <ul>
+      <li>Total Tareas Proyectos: <b>${totalProyectos}</b></li>
+      <li>Total Tareas Propuestas: <b>${totalPropuestas}</b></li>
+      <li>Tareas Atrasadas: <b>${totalAtrasadas}</b></li>
+      <li>Tareas Iniciadas: <b>${totalIniciadas}</b></li>
+      <li>Tareas Atrasadas Finalizadas: <b>${atrasadasFinalizadas}</b></li>
+      <li>Ratio Cumplimiento (Finalizadas / Totales): <b>${ratio}%</b></li>
+    </ul>`;
+}
+
+function isFinalizado(r) {
+  return (r.Estatus || "").toLowerCase() === "finalizado";
+}
+
+function isAtrasada(r) {
+  if (!r.Deadline) return false;
+  const fecha = new Date(r.Deadline);
+  const hoy = new Date();
+  return fecha < hoy && !isFinalizado(r);
+}
+
+// --- Apertura por Estatus ---
+function renderEstatus() {
+  const cont = document.getElementById("estatus-container");
+  if (!cont) return;
+
+  const atrasados = FILTERED_DATA.filter(r => isAtrasada(r));
+  const proximos = FILTERED_DATA.filter(r => daysToDeadline(r) <= 21 && daysToDeadline(r) >= 0);
+  const futuros = FILTERED_DATA.filter(r => daysToDeadline(r) > 21);
+
+  cont.innerHTML = `
+    <div class="estatus-group"><h4>Atrasados (${atrasados.length})</h4>${renderTable(atrasados)}</div>
+    <div class="estatus-group"><h4>Próximos vencimientos (≤21 días) (${proximos.length})</h4>${renderTable(proximos)}</div>
+    <div class="estatus-group"><h4>Programadas +3 semanas (${futuros.length})</h4>${renderTable(futuros)}</div>`;
+}
+
+function daysToDeadline(r) {
+  if (!r.Deadline) return 999;
+  const fecha = new Date(r.Deadline);
+  const hoy = new Date();
+  return Math.floor((fecha - hoy) / (1000 * 60 * 60 * 24));
+}
+
+function renderTable(list) {
+  if (list.length === 0) return "<p>Sin tareas en esta categoría.</p>";
+  return `
+    <table class="tabla-estatus">
+      <thead>
+        <tr><th>Cliente</th><th>Proyecto</th><th>Tareas</th><th>Deadline</th><th>Owner</th><th>Estatus</th></tr>
+      </thead>
+      <tbody>
+        ${list.map(r => `
+          <tr>
+            <td>${r.Cliente}</td>
+            <td>${r.Proyecto}</td>
+            <td>${r.Tareas}</td>
+            <td>${r.Deadline}</td>
+            <td>${r.Owner}</td>
+            <td>
+              <select data-id="${r.ID}" onchange="markChange(this)">
+                ${["No iniciado","Iniciado","On Hold","Finalizado"].map(opt =>
+                  `<option ${opt === r.Estatus ? "selected" : ""}>${opt}</option>`
+                ).join("")}
+              </select>
+            </td>
+          </tr>`).join("")}
+      </tbody>
+    </table>`;
+}
+
+function markChange(sel) {
+  const id = sel.dataset.id;
+  const newStatus = sel.value;
+  const existing = PENDING_CHANGES.find(c => c.id === id);
+  if (existing) existing.newStatus = newStatus;
+  else PENDING_CHANGES.push({ id, newStatus });
+}
+
+// --- Guardar cambios en Google Sheets ---
+async function saveChanges() {
+  try {
+    if (!PENDING_CHANGES || PENDING_CHANGES.length === 0) {
+      alert("No hay cambios pendientes para guardar.");
+      return;
+    }
+
+    const btn = document.querySelector("#btn-save");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Guardando...";
+    }
+
+    const res = await fetch(DASHBOARD_CONFIG.gsUpdateUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" }, // evita preflight
+      body: JSON.stringify({ changes: PENDING_CHANGES })
     });
 
-    const acc = document.createElement("details");
-    acc.className = "accordion";
-    if (g.title.startsWith("Atrasados") && list.length > 0) acc.open = true;
+    const txt = await res.text();
+    let out;
+    try {
+      out = JSON.parse(txt);
+    } catch (e) {
+      out = { ok: false, error: "Respuesta no JSON" };
+    }
 
-    const sum = document.createElement("summary");
-    sum.textContent = `${g.title} · ${list.length}`;
-    acc.appendChild(sum);
-
-    const content = document.createElement("div");
-    content.className = "content";
-
-    if (list.length === 0) {
-      content.innerHTML = '<div class="empty">No hay registros en esta categoría.</div>';
+    if (out.ok) {
+      alert(`✅ Cambios guardados correctamente (${out.updated} filas actualizadas).`);
+      PENDING_CHANGES = [];
+      await loadData(); // recarga los datos actualizados
     } else {
-      const table = document.createElement("table");
-      table.className = "table-status";
-      table.innerHTML = `
-        <thead>
-          <tr>
-            <th>Cliente</th>
-            <th>Proyecto</th>
-            <th>Tareas</th>
-            <th>Deadline</th>
-            <th>Owner</th>
-            <th>Estatus</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      `;
-      const tbody = table.querySelector("tbody");
-      for (const r of list) {
-        const d = parseDate(r.Deadline);
-        const tr = document.createElement("tr");
-
-        // Estatus editable (select) por ID
-        const statusSelect = document.createElement("select");
-        statusSelect.style.minWidth = "140px";
-        for (const opt of DASHBOARD_CONFIG.estatusOptions) {
-          const o = document.createElement("option");
-          o.value = opt; o.textContent = opt;
-          if ((r.Estatus||"") === opt) o.selected = true;
-          statusSelect.appendChild(o);
-        }
-        statusSelect.addEventListener("change", ()=>{
-          PENDING_CHANGES.push({
-            id: r.ID,
-            oldStatus: r.Estatus,
-            newStatus: statusSelect.value
-          });
-        });
-
-        const tdCliente = `<td title="${r.Cliente}">${r.Cliente || "-"}</td>`;
-        const tdProyecto = `<td title="${r.Proyecto}">${r.Proyecto || "-"}</td>`;
-        const tdTareas = `<td title="${r.Tareas}">${r.Tareas || "-"}</td>`;
-        const tdDeadline = `<td>${d ? formatDateISO(d) : "-"}</td>`;
-        const tdOwner = `<td>${r.Owner || "-"}</td>`;
-
-        const tdEstatus = document.createElement("td");
-        tdEstatus.appendChild(statusSelect);
-
-        tr.innerHTML = tdCliente + tdProyecto + tdTareas + tdDeadline + tdOwner;
-        tr.appendChild(tdEstatus);
-        tbody.appendChild(tr);
-      }
-      content.appendChild(table);
+      alert(`⚠️ Error al guardar: ${out.error || "Error desconocido"}`);
     }
-    acc.appendChild(content);
-    container.appendChild(acc);
-  }
-}
-
-/* ---------- RESUMEN EJECUTIVO ---------- */
-
-function getSummaryIncludeFinished(){
-  const chk = document.querySelector('#chk-include-finished');
-  return !!(chk && chk.checked);
-}
-function computeResumen() {
-  const today = new Date(); today.setHours(0,0,0,0);
-  const includeFinished = getSummaryIncludeFinished();
-
-  const S = FILTERED.filter(r => includeFinished || (String(r.Estatus||'').toLowerCase().trim() !== 'finalizado'));
-
-  let totalProyectos = 0;
-  let totalPropuestas = 0;
-  let atrasadasTotal = 0;
-  let iniciadasTotal = 0;
-  let atrasadasNoIniciadas = 0;
-  let finalizadasTotal = 0;
-
-  for (const r of S) {
-    const tipo = (r.Tipo || "").toLowerCase().trim();
-    const estatus = (r.Estatus || "").toLowerCase().trim();
-    const d = parseDate(r.Deadline);
-
-    if (tipo === "proyecto" || tipo === "proyectos") totalProyectos += 1;
-    if (tipo === "propuesta" || tipo === "propuestas") totalPropuestas += 1;
-
-    if (estatus === "iniciado") iniciadasTotal += 1;
-    if (estatus === "finalizado") finalizadasTotal += 1;
-
-    if (d && d < today) {
-      atrasadasTotal += 1;
-      if (estatus === "no iniciado") atrasadasNoIniciadas += 1;
+  } catch (err) {
+    console.error("Error al guardar cambios:", err);
+    alert("❌ Error de red al guardar cambios.");
+  } finally {
+    const btn = document.querySelector("#btn-save");
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Guardar cambios";
     }
   }
-
-  const totalTareas = S.length;
-  const ratio = totalTareas > 0 ? (finalizadasTotal / totalTareas) : null;
-
-  return { totalProyectos, totalPropuestas, atrasadasTotal, iniciadasTotal, atrasadasNoIniciadas, ratio };
 }
 
-function renderResumenEjecutivo() {
-  const k = computeResumen();
-  const wrap = document.querySelector("#resumen-ejecutivo");
-  if (!wrap) return;
-  const fmt = (v) => (v == null ? "-" : (typeof v === "number" ? v.toLocaleString() : v));
-  const pct = (v) => (v == null ? "-" : (v*100).toFixed(1) + "%");
+// --- Reporte gráfico (torta de estatus) ---
+function renderReporte() {
+  const ctx = document.getElementById("chart-estatus")?.getContext("2d");
+  if (!ctx) return;
+  const counts = { "No iniciado":0, "Iniciado":0, "On Hold":0, "Finalizado":0 };
+  FILTERED_DATA.forEach(r => { if (r.Estatus) counts[r.Estatus]++; });
 
-  wrap.innerHTML = `
-    <div class="kpi">
-      <div class="kpi-label">Total Tareas para Proyectos</div>
-      <div class="kpi-value">${fmt(k.totalProyectos)}</div>
-    </div>
-    <div class="kpi">
-      <div class="kpi-label">Total Tareas para Propuestas</div>
-      <div class="kpi-value">${fmt(k.totalPropuestas)}</div>
-    </div>
-    <div class="kpi">
-      <div class="kpi-label">Total Tareas Atrasadas</div>
-      <div class="kpi-value">${fmt(k.atrasadasTotal)}</div>
-    </div>
-    <div class="kpi">
-      <div class="kpi-label">Total Tareas Iniciadas</div>
-      <div class="kpi-value">${fmt(k.iniciadasTotal)}</div>
-    </div>
-    <div class="kpi">
-      <div class="kpi-label">Tareas Atrasadas no Iniciadas</div>
-      <div class="kpi-value">${fmt(k.atrasadasNoIniciadas)}</div>
-    </div>
-    <div class="kpi">
-      <div class="kpi-label">Ratio Cumplimiento (Finalizadas / Totales)</div>
-      <div class="kpi-value">${pct(k.ratio)}</div>
-    </div>
-  `;
-}
-
-/* ---------- REPORTE ---------- */
-
-function renderPie() {
-  if (window.Chart && window.ChartDataLabels) { Chart.register(ChartDataLabels); }
-  const ctx = document.querySelector("#chart-estatus").getContext("2d");
-  const counts = {};
-  for (const r of FILTERED) {
-    const k = r.Estatus || "Sin estatus";
-    counts[k] = (counts[k] || 0) + 1;
-  }
-  const labels = Object.keys(counts);
-  const data = Object.values(counts);
-
-  if (PIE_CHART) PIE_CHART.destroy();
-  PIE_CHART = new Chart(ctx, {
+  if (window.statusChart) window.statusChart.destroy();
+  window.statusChart = new Chart(ctx, {
     type: "pie",
     data: {
-      labels,
+      labels: Object.keys(counts),
       datasets: [{
-        data,
-        backgroundColor: ["#00D1FF","#FF4D4D","#FFC300","#2ECC71","#9B59B6","#FF7F00","#1abc9c","#e67e22"]
+        data: Object.values(counts),
+        backgroundColor: ["#ff4d4d","#ffc107","#17a2b8","#28a745"]
       }]
     },
     options: {
       plugins: {
-        legend: { position: "right", labels: { color: "#E6E8EB" } },
-        tooltip: { enabled: true },
-        datalabels: {
-          formatter: (value, ctx) => {
-            const arr = ctx.chart.data.datasets[0].data;
-            const sum = arr.reduce((a,b)=>a+b, 0) || 1;
-            const pct = (value / sum) * 100;
-            return pct.toFixed(0) + "%";
-          },
-          color: "#ffffff",
-          font: { weight: "bold" }
+        legend: { labels: { color: "#fff" } },
+        tooltip: {
+          callbacks: {
+            label: (context) => {
+              const total = context.chart._metasets[0].total;
+              const pct = ((context.parsed / total) * 100).toFixed(1);
+              return `${context.label}: ${pct}%`;
+            }
+          }
         }
       }
     }
