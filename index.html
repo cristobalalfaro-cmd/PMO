@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard Gestión de Proyectos</title>
+  <link rel="stylesheet" href="./css/styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0"></script>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="title">Dashboard · Gestión de Proyectos</div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <div class="badge">v3</div>
+        <button id="btn-refresh" class="btn-green" title="Actualizar datos">Actualizar</button>
+        <button id="btn-share" class="btn-ghost" title="Copiar enlace compartido">Copiar enlace</button>
+      </div>
+    </div>
+
+    <!-- Filtros -->
+    <section class="panel">
+      <h2>Filtros principales</h2>
+      <div class="filters">
+        <div class="form-control">
+          <label for="f-tipo">Tipo</label>
+          <select id="f-tipo"><option value="">Todos</option></select>
+        </div>
+        <div class="form-control">
+          <label for="f-cliente">Cliente</label>
+          <select id="f-cliente"><option value="">Todos</option></select>
+        </div>
+        <div class="form-control">
+          <label for="f-proyecto">Proyecto</label>
+          <select id="f-proyecto"><option value="">Todos</option></select>
+        </div>
+        <div class="form-control">
+          <label for="f-estatus">Estatus</label>
+          <select id="f-estatus"><option value="">Todos</option></select>
+        </div>
+        <div class="form-control">
+          <label for="f-owner">Owner</label>
+          <select id="f-owner"><option value="">Todos</option></select>
+        </div>
+        <button id="btn-reset" title="Limpiar filtros">Limpiar</button>
+      </div>
+    </section>
+
+    <!-- Resumen ejecutivo -->
+    <section class="panel">
+      <h2>Resumen ejecutivo</h2>
+      <div style="margin:6px 0 12px;display:flex;align-items:center;gap:10px">
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#cdd6f4">
+          <input id="chk-include-finished" type="checkbox" style="transform:translateY(1px)">
+          Incluir finalizados
+        </label>
+      </div>
+      <div id="resumen-ejecutivo" class="kpi-grid"></div>
+    </section>
+
+    <!-- Apertura por estatus -->
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Apertura por estatus</h2>
+        <div style="display:flex;gap:8px">
+          <button id="btn-discard-edits" class="btn-ghost" title="Descartar cambios">Descartar cambios</button>
+          <button id="btn-save-edits" class="btn-blue" title="Guardar cambios">Guardar cambios</button>
+        </div>
+      </div>
+      <div id="apertura-estatus"></div>
+      <div id="save-msg" class="save-msg"></div>
+    </section>
+
+    <!-- Reporte -->
+    <section class="panel">
+      <h2>Reporte</h2>
+      <div class="report-grid">
+        <div class="card">
+          <canvas id="chart-estatus" height="220"></canvas>
+        </div>
+        <div class="card">
+          <p style="margin:0 0 6px;color:#9fb6ff">Indicaciones</p>
+          <ul style="margin:0 0 0 18px; padding:0; line-height:1.6">
+            <li>Distribución de <b>Estatus</b> con filtros aplicados (porcentaje en la torta).</li>
+            <li>Apertura: <i>Atrasados</i>, <i>Próximos vencimientos (≤ 21 días)</i> y <i>+3 semanas</i>.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <div class="footer">Hecho con ❤️ · Chart.js · PapaParse</div>
+  </div>
+
+  <!-- Modal de acceso -->
+  <div id="access-modal" class="access-modal" style="display:none">
+    <div class="access-card">
+      <div class="access-title">Acceso</div>
+      <div class="access-sub">Ingresa la clave para continuar</div>
+      <input id="access-input" type="password" placeholder="Clave" class="access-input" autofocus />
+      <div class="access-actions">
+        <button id="access-btn" class="btn-green">Entrar</button>
+      </div>
+      <div id="access-msg" class="access-msg"></div>
+    </div>
+  </div>
+
+  <script src="./data/config.js"></script>
+  <script src="./js/utils.js"></script>
+  <script src="./js/app.js"></script>
+</body>
+</html>
