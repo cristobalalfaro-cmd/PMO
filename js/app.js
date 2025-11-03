@@ -15,6 +15,7 @@ async function init(){
   bindRefresh();                       // Botón actualizar
   bindShare();                         // Copiar enlace compartido
   bindSaveEdits();                     // Guardar cambios (estatus por ID)
+  bindDiscardEdits();                  // Descartar cambios
 
   const chk = document.querySelector("#chk-include-finished");
   if (chk) chk.addEventListener("change", () => renderResumenEjecutivo());
@@ -128,20 +129,62 @@ function buildFilters(rebuild=false) {
   }
 
   const tipos = uniqueSorted(RAW.map(r=>r.Tipo));
-  const clientes = uniqueSorted(RAW.map(r=>r.Cliente));
-  const proyectos = uniqueSorted(RAW.map(r=>r.Proyecto));
-  const estatuses = uniqueSorted(RAW.map(r=>r.Estatus));
-  const owners = uniqueSorted(RAW.map(r=>r.Owner));
-
   for (const v of tipos) tipoSel.append(new Option(v, v));
-  for (const v of clientes) clienteSel.append(new Option(v, v));
-  for (const v of proyectos) proyectoSel.append(new Option(v, v));
-  for (const v of estatuses) estatusSel.append(new Option(v, v));
-  for (const v of owners) ownerSel.append(new Option(v, v));
+
+  updateCascadingFilters();
 
   [tipoSel, clienteSel, proyectoSel, estatusSel, ownerSel].forEach(sel => {
-    sel.addEventListener("change", applyFiltersAndRender);
+    sel.addEventListener("change", () => {
+      updateCascadingFilters();
+      applyFiltersAndRender();
+    });
   });
+}
+
+function updateCascadingFilters() {
+  const tipoSel = document.querySelector("#f-tipo");
+  const clienteSel = document.querySelector("#f-cliente");
+  const proyectoSel = document.querySelector("#f-proyecto");
+  const estatusSel = document.querySelector("#f-estatus");
+  const ownerSel = document.querySelector("#f-owner");
+
+  const selectedTipo = tipoSel.value;
+  const selectedCliente = clienteSel.value;
+  const selectedProyecto = proyectoSel.value;
+  const selectedEstatus = estatusSel.value;
+
+  let filtered = RAW;
+  if (selectedTipo) filtered = filtered.filter(r => r.Tipo === selectedTipo);
+
+  const clientes = uniqueSorted(filtered.map(r => r.Cliente));
+  updateSelectOptions(clienteSel, clientes, selectedCliente);
+
+  if (selectedCliente) filtered = filtered.filter(r => r.Cliente === selectedCliente);
+  const proyectos = uniqueSorted(filtered.map(r => r.Proyecto));
+  updateSelectOptions(proyectoSel, proyectos, selectedProyecto);
+
+  if (selectedProyecto) filtered = filtered.filter(r => r.Proyecto === selectedProyecto);
+  const estatuses = uniqueSorted(filtered.map(r => r.Estatus));
+  updateSelectOptions(estatusSel, estatuses, selectedEstatus);
+
+  if (selectedEstatus) filtered = filtered.filter(r => r.Estatus === selectedEstatus);
+  const owners = uniqueSorted(filtered.map(r => r.Owner));
+  updateSelectOptions(ownerSel, owners, ownerSel.value);
+}
+
+function updateSelectOptions(selectElement, options, selectedValue) {
+  const currentValue = selectElement.value;
+  selectElement.length = 1;
+  
+  for (const v of options) {
+    selectElement.append(new Option(v, v));
+  }
+  
+  if (selectedValue && options.includes(selectedValue)) {
+    selectElement.value = selectedValue;
+  } else if (currentValue && options.includes(currentValue)) {
+    selectElement.value = currentValue;
+  }
 }
 
 function readUrlFilters(){
@@ -180,6 +223,7 @@ function applyFiltersAndRender() {
 function bindReset() {
   document.querySelector("#btn-reset").addEventListener("click", () => {
     ["#f-tipo","#f-cliente","#f-proyecto","#f-estatus","#f-owner"].forEach(sel => document.querySelector(sel).value = "");
+    updateCascadingFilters();
     applyFiltersAndRender();
   });
 }
@@ -237,7 +281,10 @@ function bindSaveEdits(){
       const out = await res.json().catch(()=>({ ok:false, error:"Respuesta no JSON" }));
       if (out.ok) {
         msg.textContent = "Cambios guardados correctamente.";
+        PENDING_CHANGES = [];
         await loadData(true);
+        buildFilters(true);
+        readUrlFilters();
         applyFiltersAndRender();
       } else {
         msg.textContent = "Error al guardar: " + (out.error||"desconocido");
@@ -246,8 +293,22 @@ function bindSaveEdits(){
       msg.textContent = "Error de red al guardar cambios.";
     } finally {
       btn.disabled = false; btn.textContent = "Guardar cambios";
-      PENDING_CHANGES = [];
     }
+  });
+}
+
+function bindDiscardEdits(){
+  const btn = document.getElementById("btn-discard-edits");
+  const msg = document.getElementById("save-msg");
+  btn.addEventListener("click", ()=>{
+    if (!PENDING_CHANGES.length) {
+      msg.textContent = "No hay cambios para descartar.";
+      return;
+    }
+    PENDING_CHANGES = [];
+    msg.textContent = "Cambios descartados. Refrescando vista...";
+    renderAperturaPorEstatus();
+    setTimeout(() => { msg.textContent = ""; }, 3000);
   });
 }
 
@@ -258,18 +319,27 @@ function renderAperturaPorEstatus() {
   container.innerHTML = "";
 
   const today = new Date(); today.setHours(0,0,0,0);
+  const yesterday = new Date(today); yesterday.setDate(yesterday.getDate() - 1);
   const in21 = new Date(today); in21.setDate(in21.getDate() + 21);
 
+  const finalizados = [];
   const atrasados = [];
   const proximos = [];
   const futuros = [];
 
   for (const r of FILTERED) {
-    const d = parseDate(r.Deadline);
-    if (!d) continue;
     const estatus = (r.Estatus || "").toLowerCase().trim();
     const esFinalizado = estatus === "finalizado";
-    if (d < today && !esFinalizado) {
+    
+    if (esFinalizado) {
+      finalizados.push(r);
+      continue;
+    }
+    
+    const d = parseDate(r.Deadline);
+    if (!d) continue;
+    
+    if (d <= yesterday) {
       atrasados.push(r);
     } else if (d >= today && d <= in21) {
       proximos.push(r);
@@ -279,6 +349,7 @@ function renderAperturaPorEstatus() {
   }
 
   const groups = [
+    {title: "Finalizados", data: finalizados},
     {title: "Atrasados", data: atrasados},
     {title: "Próximos vencimientos (≤ 21 días)", data: proximos},
     {title: "Actividades programadas para más de 3 semanas", data: futuros}
